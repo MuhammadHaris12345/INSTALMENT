@@ -195,12 +195,12 @@ window.APP={DB,ui,render,toast,setSess:v=>{SESS=v}};$('#app').innerHTML='<p styl
 <script type="module">
 /* ===================== FIREBASE SETTINGS — paste your own firebaseConfig here ===================== */
 const firebaseConfig={
-  apiKey:"AIzaSyAdG-ifnLoE-0Qk646bla0oqDDsPAhOmAY",
-  authDomain:"ns-traders-database.firebaseapp.com",
-  projectId:"ns-traders-database",
-  storageBucket:"ns-traders-database.firebasestorage.app",
-  messagingSenderId:"86487517820",
-  appId:"1:86487517820:web:1eaf7aae71b5bafbd997f9"
+  apiKey:"AIzaSyCRJW8oUddZC3HVgXacEOYI3DO-jm-dggs",
+  authDomain:"classpro-9d2c3.firebaseapp.com",
+  projectId:"classpro-9d2c3",
+  storageBucket:"classpro-9d2c3.firebasestorage.app",
+  messagingSenderId:"250861334850",
+  appId:"1:250861334850:web:e523eb47fc7d18f48298db"
 };
 const DOMAIN='installments.app'; // usernames become username@installments.app in Firebase Authentication
 /* =================================================================================================== */
@@ -227,7 +227,7 @@ try{const s=await getDoc(doc(db,'users',u.uid));if(!s.exists()){APP.toast('Accou
 const me={...s.data(),id:u.uid};APP.DB.users=[me];APP.setSess({userId:u.uid,role:me.role});APP.ui.view={admin:'dash',sales:'mine'}[me.role]||'today';listen(u,me.role);APP.render()}
 catch(e){APP.toast('Login error: '+(e.code||e.message));await signOut(auth)}});
 window.FB={
- async login(id,pw){if(!id||!pw)return APP.toast('Enter username and password');try{await signInWithEmailAndPassword(auth,id.includes('@')?id:id.toLowerCase()+'@'+DOMAIN,pw)}catch(e){APP.toast('Invalid username or password')}},
+ async login(id,pw){if(!id||!pw)return APP.toast('Enter username and password');try{await signInWithEmailAndPassword(auth,id.includes('@')?id:id.toLowerCase()+'@'+DOMAIN,pw)}catch(e){console.error(e);APP.toast('Login failed: '+(e.code||e.message))}},
  logout(){signOut(auth)},
  async changePass(o,n){if(n.length<6)return APP.toast('New password: min 6 characters');try{const u=auth.currentUser;await reauthenticateWithCredential(u,EmailAuthProvider.credential(u.email,o));await updatePassword(u,n);closeM();APP.toast('Password changed')}catch(e){APP.toast('Current password is wrong')}},
  async createUser(p,pw){try{const a2=getAuth(initializeApp(firebaseConfig,'sec'+Date.now())),un=p.username.toLowerCase(),c=await createUserWithEmailAndPassword(a2,un+'@'+DOMAIN,pw);await signOut(a2);await setDoc(doc(db,'users',c.user.uid),{...p,username:un});closeM();APP.toast('User created')}catch(e){APP.toast(e.code=='auth/email-already-in-use'?'This username already exists in Firebase':'Error: '+(e.code||e.message))}}
