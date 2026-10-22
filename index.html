@@ -42,7 +42,9 @@ th,td{padding:10px;text-align:left;border-bottom:1px solid var(--b);white-space:
 </style></head><body><div id="app"></div><div id="toasts"></div><div id="modal"></div><div id="dlg"></div>
 <script>
 /* ===== Helpers & storage ===== */
-const $=q=>document.querySelector(q),get=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+const $=q=>document.querySelector(q);let SESS=null;const DB={users:[],customers:[],installments:[]};
+/* Data lives in Firestore. DB is a live in-memory copy of what the logged-in user may see; set() updates it instantly and FBsync() saves the changes to Firestore. */
+const get=(k,d)=>k=='session'?SESS:(DB[k]||d),set=(k,v)=>{if(k=='session'){SESS=v;return}const old=DB[k];DB[k]=v;FBsync(k,old,v)};
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])),rs=n=>'Rs. '+Math.round(n).toLocaleString('en-US');
 const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`,today=()=>iso(new Date()),pd=s=>new Date(s+'T00:00:00'),addD=(s,n)=>{const d=pd(s);d.setDate(d.getDate()+n);return iso(d)},diff=(a,b)=>Math.round((pd(a)-pd(b))/864e5);
 const U=()=>get('users',[]),C=()=>get('customers',[]),I=()=>get('installments',[]),S=()=>get('session',null);
@@ -61,14 +63,14 @@ const a=mk('c1','Bilal Ahmed','Ahmed Khan','42101-1234567-1','0301-1112223',[{na
 set('customers',[a[0],b[0]]);set('installments',[a[1],b[1]])}
 /* ===== Auth ===== */
 let ui={view:'dash',q:'',st:'',cal:{}};
-function loginView(){$('#app').innerHTML=`<div class="login"><h2>📒 Installment Manager</h2><label>Username</label><input id="lu"><label>Password</label><input id="lp" type="password" onkeydown="if(event.key=='Enter')doLogin()"><br><br><button style="width:100%" onclick="doLogin()">Login</button><p style="font-size:12px;color:var(--m)">Demo: admin/admin123 · ali/ali123</p></div>`}
-function doLogin(){const u=U().find(x=>x.username===$('#lu').value.trim()&&x.password===$('#lp').value);if(!u)return toast('Invalid username or password');set('session',{userId:u.id,role:u.role});ui.view={admin:'dash',sales:'mine'}[u.role]||'today';render()}
-function logout(){localStorage.removeItem('session');render()}
+function loginView(){$('#app').innerHTML=`<div class="login"><h2>📒 Installment Manager</h2><label>Username</label><input id="lu"><label>Password</label><input id="lp" type="password" onkeydown="if(event.key=='Enter')doLogin()"><br><br><button style="width:100%" onclick="doLogin()">Login</button><p style="font-size:12px;color:var(--m)">Enter your username (admin: full email if needed)</p></div>`}
+function doLogin(){FB.login($('#lu').value.trim(),$('#lp').value)}
+function logout(){FB.logout()}
 function chPass(){M(`<h3>Change password</h3><label>Current</label><input id="o" type="password"><label>New (min 6 chars)</label><input id="n" type="password"><br><br><div class="row"><button class="s" onclick="closeM()">Cancel</button><button onclick="savePass()">Save</button></div>`)}
-function savePass(){const us=U(),u=us.find(x=>x.id===S().userId);if(u.password!==$('#o').value)return toast('Current password wrong');if($('#n').value.length<6)return toast('Min 6 characters');u.password=$('#n').value;set('users',us);closeM();toast('Password changed')}
+function savePass(){FB.changePass($('#o').value,$('#n').value)}
 function render(){const s=S();if(!s||!U().find(u=>u.id===s.userId)){botUnmount();return loginView()}({admin:adminShell,sales:salShell}[s.role]||recShell)();s.role=='admin'?botMount():botUnmount()}
 /* ===== Payments (any amount: partial, advance, late, full settlement) ===== */
-function addPay(iid,amt,by){const l=I(),i=l.find(x=>x.id===iid),left=i.remaining-paidSum(i);amt=Math.min(Math.round(amt),left);if(amt<=0)return null;const p={date:today(),amount:amt,receivedBy:by,timestamp:new Date().toISOString()};i.payments.push(p);set('installments',l);return p}
+function addPay(iid,amt,by){const l=I(),i=l.find(x=>x.id===iid),left=i.remaining-paidSum(i);amt=Math.min(Math.round(amt),left);if(amt<=0)return null;const p={date:today(),amount:amt,receivedBy:by,receivedByUid:S().userId,timestamp:new Date().toISOString()};i.payments.push(p);set('installments',l);return p}
 function unpay(iid,ts){const l=I(),i=l.find(x=>x.id===iid);i.payments=i.payments.filter(p=>p.timestamp!==ts);set('installments',l)}
 function receipt(iid,ts){const i=I().find(x=>x.id===iid),c=custOf(i.customerId),p=i.payments.find(x=>x.timestamp===ts),w=window.open('','_blank','width=380,height=540');if(!w)return toast('Allow popups');
 w.document.write(`<body style="font-family:sans-serif;max-width:300px"><h3 style="text-align:center">Payment Receipt</h3><hr><p>Customer: ${esc(c.name)}<br>Date: ${p.date}<br>Time: ${new Date(p.timestamp).toLocaleTimeString()}<br>Amount: <b>${rs(p.amount)}</b><br>Received by: ${esc(p.receivedBy)}<br>Total paid: ${rs(paidSum(i))}<br>Remaining: <b>${rs(Math.max(0,i.remaining-paidSum(i)))}</b></p><hr><p style="text-align:center">Thank you</p><script>print()<\/script>`);w.document.close()}
@@ -79,7 +81,7 @@ $('#dlg').innerHTML=`<div class="box" style="max-width:380px"><h3 style="margin-
 <div class="row"><button class="s" onclick="$('#dlg').style.display='none'">Cancel</button><button class="ok" onclick="payGo('${iid}')">Receive ✔</button></div></div>`;$('#dlg').style.display='flex';pv(iid)}
 function pv(iid){const i=I().find(x=>x.id===iid),a=Math.min(+$('#pa').value||0,i.remaining-paidSum(i)),P=paidSum(i)+a,cd=P>=i.remaining?i.days:Math.floor(P/i.daily);let m;
 if($('#pa').value.trim()==='')m='Enter an amount';else if(a<=0)m='No payment will be recorded (customer did not pay today)';else if(P>=i.remaining)m='🎉 Plan will be COMPLETED (all days green)';else{m=`Calendar: <b>${cd}/${i.days}</b> days paid · Remaining <b>${rs(i.remaining-P)}</b>`;const need=owed(i,today())-P;m+=need>0?` · <span style="color:var(--r)">Still due ${rs(need)}</span>`:cd>diff(today(),i.start)+1?` · Paid ahead till ${addD(i.start,cd-1)}`:' · Up to date ✔'}$('#pvw').innerHTML=m}
-function payGo(iid){const i=I().find(x=>x.id===iid),a=+$('#pa').value,bal=i.remaining-paidSum(i);if($('#pa').value.trim()===''||isNaN(a)||a<0)return toast('Enter a valid amount');if(a===0){const l=I(),j=l.find(x=>x.id===iid);j.payments.push({date:today(),amount:0,noPay:true,receivedBy:userName(S().userId),timestamp:new Date().toISOString()});set('installments',l);$('#dlg').style.display='none';toast('No payment received — recorded');render();if($('#modal').style.display=='flex')openCust(i.customerId);return}if(a>bal)return toast('Amount exceeds balance '+rs(bal));
+function payGo(iid){const i=I().find(x=>x.id===iid),a=+$('#pa').value,bal=i.remaining-paidSum(i);if($('#pa').value.trim()===''||isNaN(a)||a<0)return toast('Enter a valid amount');if(a===0){const l=I(),j=l.find(x=>x.id===iid);j.payments.push({date:today(),amount:0,noPay:true,receivedByUid:S().userId,receivedBy:userName(S().userId),timestamp:new Date().toISOString()});set('installments',l);$('#dlg').style.display='none';toast('No payment received — recorded');render();if($('#modal').style.display=='flex')openCust(i.customerId);return}if(a>bal)return toast('Amount exceeds balance '+rs(bal));
 const p=addPay(iid,a,userName(S().userId));$('#dlg').style.display='none';toast(rs(p.amount)+' received');render();if($('#modal').style.display=='flex')openCust(i.customerId);setTimeout(()=>ask('Print receipt?',()=>receipt(iid,p.timestamp)),150)}
 function doUnpay(iid,ts){ask('Undo this payment? Calendar will be recalculated.',()=>{unpay(iid,ts);toast('Payment removed');render();openCust(I().find(x=>x.id===iid).customerId)})}
 /* ===== Calendar (days are filled in order from the total paid amount) ===== */
@@ -155,8 +157,9 @@ M(`<div class="top"><h3 style="margin:0">${sales?'🧑‍💼':'🚚'} ${esc(u.n
 function vRec(){return vPeople('recovery')}function vSal(){return vPeople('sales')}
 function vPeople(role){const t=role=='sales'?'Salesmen':'Recovery Men';return`<div class="top"><h2>${t}</h2><button onclick="recForm('','${role}')">+ Add</button></div><div class="tw"><table><tr><th>Name</th><th>Phone</th><th>Username</th><th>Customers</th><th></th></tr>${U().filter(u=>u.role==role).map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.phone)}</td><td>${esc(u.username)}</td><td>${C().filter(c=>role=='sales'?c.addedBy==u.id:c.recoveryId==u.id).length}</td><td class="row"><button class="sm" onclick="showCust('${u.id}')">👥 Show customers</button><button class="s sm" onclick="recForm('${u.id}')">Edit</button><button class="d sm" onclick="delRec('${u.id}')">Del</button></td></tr>`).join('')||'<tr><td colspan=5>None added yet</td></tr>'}</table></div>`}
 let _rrole='recovery';function recForm(id,role){const u=id?U().find(x=>x.id==id):{};_rrole=id?u.role:role||'recovery';M(`<h3>${id?'Edit':'Add'} ${_rrole=='sales'?'Salesman':'Recovery Man'}</h3>${[['name','Name',u.name],['phone','Phone',u.phone],['username','Username',u.username],['password','Password (min 6)',u.password]].map(([k,l,v])=>`<label>${l}</label><input id="r_${k}" value="${esc(v)}">`).join('')}<br><br><div class="row"><button class="s" onclick="closeM()">Cancel</button><button onclick="saveRec('${id||''}')">Save</button></div>`)}
-function saveRec(id){const v=k=>$('#r_'+k).value.trim(),us=U();if(!v('name')||!/^[0-9+\-\s]{10,15}$/.test(v('phone'))||v('username').length<3||v('password').length<6)return toast('Fill all fields correctly');if(us.some(x=>x.username==v('username')&&x.id!=id))return toast('Username taken');
-let u=id&&us.find(x=>x.id==id);if(!u){u={id:uid(),role:_rrole};us.push(u)}Object.assign(u,{name:v('name'),phone:v('phone'),username:v('username'),password:v('password')});set('users',us);closeM();render();toast('Saved')}
+function saveRec(id){const v=k=>$('#r_'+k).value.trim();if(!v('name')||!/^[0-9+\-\s]{10,15}$/.test(v('phone')))return toast('Enter a valid name and phone');
+if(id){const us=U(),u=us.find(x=>x.id==id);Object.assign(u,{name:v('name'),phone:v('phone')});set('users',us);closeM();render();return toast('Saved')}
+if(!/^[A-Za-z0-9._-]{3,}$/.test(v('username')))return toast('Username: min 3 chars, only letters, numbers, . _ - (no spaces)');if(v('password').length<6)return toast('Password min 6 characters');if(U().some(x=>x.username==v('username').toLowerCase()))return toast('Username taken');FB.createUser({name:v('name'),phone:v('phone'),username:v('username'),role:_rrole},v('password'))}
 function delRec(id){if(C().some(c=>c.recoveryId==id||c.addedBy==id))return toast('Reassign this man\'s customers first');ask('Delete recovery man?',()=>{set('users',U().filter(u=>u.id!=id));render()})}
 function repRows(){const f=$('#d1')?$('#d1').value:today(),t=$('#d2')?$('#d2').value:today(),r=$('#rm')?$('#rm').value:'';return I().flatMap(i=>i.payments.map(p=>({...p,c:custOf(i.customerId),i}))).filter(p=>p.c&&p.date>=f&&p.date<=t&&(!r||p.c.recoveryId==r)).sort((a,b)=>a.date<b.date?-1:1)}
 function vRep(){setTimeout(drawRep,0);return`<div class="top"><h2>Daily Recovery Report</h2></div><div class="bar"><input type="date" id="d1" value="${today()}" onchange="drawRep()"><input type="date" id="d2" value="${today()}" onchange="drawRep()"><select id="rm" onchange="drawRep()"><option value="">All recovery men</option>${U().filter(u=>u.role=='recovery').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select><button onclick="exportRep()">Export</button></div><div id="rep"></div>`}
@@ -166,7 +169,7 @@ function exportCust(){xl('customers',[['Name','Father','CNIC','Phone','Address',
 function exportLedger(cid){const c=custOf(cid),i=planOf(cid),rows=[['Customer',c.name],['Total',i.total,'Paid',paidSum(i),'Balance',Math.max(0,i.remaining-paidSum(i))],[],['Day','Date','Status']];for(let k=1;k<=i.days;k++){const d=addD(i.start,k-1);rows.push([k,d,cov(i,k)?'Paid':d<today()?'Missed':'Upcoming'])}rows.push([],['Receipts'],['Date','Amount','Received By','Timestamp']);i.payments.forEach(p=>rows.push([p.date,p.amount,p.receivedBy,p.timestamp]));xl('ledger_'+c.name.replace(/\s+/g,'_'),rows)}
 function vBak(){return`<h2>Backup / Restore</h2><div class="card"><p>Download all data as JSON, or restore from a previous backup.</p><button onclick="backup()">⬇ Download backup</button><br><br><input type="file" accept=".json" onchange="restore(this.files[0])"></div>`}
 function backup(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({users:U(),customers:C(),installments:I()})],{type:'application/json'}));a.download='installments_backup_'+today()+'.json';a.click()}
-function restore(f){if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.users||!d.customers||!d.installments)throw 0;ask('Replace ALL current data with this backup?',()=>{set('users',d.users);set('customers',d.customers);set('installments',d.installments);localStorage.removeItem('session');render();toast('Restored')})}catch{toast('Invalid backup file')}};r.readAsText(f)}
+function restore(f){if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.users||!d.customers||!d.installments)throw 0;ask('Replace ALL current data with this backup?',()=>{set('customers',d.customers);set('installments',d.installments);render();toast('Restored')})}catch{toast('Invalid backup file')}};r.readAsText(f)}
 /* ===== Recovery panel ===== */
 function mine(){const s=S();return C().filter(c=>c.recoveryId==s.userId&&ok(c)).map(c=>({c,i:planOf(c.id)})).filter(x=>x.i&&stat(x.i)=='Active')}
 function recShell(){const t=today(),L=mine(),s=S(),v=ui.view,nm=userName(s.userId);
@@ -175,7 +178,7 @@ btn=(x,l)=>`<button class="ok" style="width:100%;margin-top:8px" onclick="payDlg
 if(v=='today'){const due=L.filter(x=>dueNow(x.i)>0);h=`<h3>Today's List (${due.length})</h3>`+(due.map(x=>card(x,btn(x,`💵 Receive — due ${rs(dueNow(x.i))}`))).join('')||'<p>🎉 Nothing pending for today.</p>')}
 else if(v=='pend'){const m=L.filter(x=>lateAmt(x.i)>0);h=`<h3>Missed / Late (${m.length})</h3>`+(m.map(x=>card(x,`<p style="font-size:12px;margin:8px 0 0">≈ ${Math.ceil(lateAmt(x.i)/x.i.daily)} day(s) missed</p>`+btn(x,`💵 Collect late payment — ${rs(lateAmt(x.i))}`))).join('')||'<p>No missed days 👍</p>')}
 else{const mp=I().flatMap(i=>i.payments.filter(p=>p.date==t&&p.receivedBy==nm).map(p=>({...p,i})));h=`<h3>Today's Summary</h3><div class="cards"><div class="card">Collected today<b>${rs(mp.reduce((a,p)=>a+p.amount,0))}</b></div><div class="card">No-payment visits<b>${mp.filter(p=>!p.amount).length}</b></div><div class="card">Customers pending<b>${L.filter(x=>dueNow(x.i)>0).length}</b></div></div><div class="tw"><table>${mp.map(p=>`<tr><td>${esc(custOf(p.i.customerId).name)}</td><td>${p.amount?rs(p.amount):'No payment'}</td><td>${p.amount?`<button class="s sm" onclick="receipt('${p.i.id}','${p.timestamp}')">Receipt</button>`:''}</td></tr>`).join('')||'<tr><td>No collections yet</td></tr>'}</table></div>`}
-$('#app').innerHTML=`<div class="rm"><div class="top"><b>👋 ${esc(nm)}</b><button class="s sm" onclick="logout()">Logout</button></div>${h}</div><div class="nav">${[['today','📋 Today'],['pend','⚠ Missed'],['sum','💰 Summary']].map(([k,l])=>`<button class="${v==k?'a':''}" onclick="ui.view='${k}';render()">${l}</button>`).join('')}</div>`}
+$('#app').innerHTML=`<div class="rm"><div class="top"><b>👋 ${esc(nm)}</b><span><button class="s sm" onclick="chPass()">🔑</button> <button class="s sm" onclick="logout()">Logout</button></span></div>${h}</div><div class="nav">${[['today','📋 Today'],['pend','⚠ Missed'],['sum','💰 Summary']].map(([k,l])=>`<button class="${v==k?'a':''}" onclick="ui.view='${k}';render()">${l}</button>`).join('')}</div>`}
 /* ===== Admin: approve / reject customers added by salesmen ===== */
 function vAppr(){const pl=C().filter(c=>c.approval=='pending'),rj=C().filter(c=>c.approval=='rejected'),row=(c,p)=>{const i=planOf(c.id)||{};return`<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${esc(userName(c.addedBy))}</td><td>${rs(i.total||0)}</td><td>${rs(i.daily||0)} × ${i.days||0}d</td><td class="row"><button class="sm" onclick="openCust('${c.id}')">View</button><button class="s sm" onclick="custForm('${c.id}')">Edit</button>${p?`<button class="ok sm" onclick="apprDlg('${c.id}')">Approve</button><button class="d sm" onclick="rejDlg('${c.id}')">Reject</button>`:`<span style="font-size:11px;color:var(--r)">${esc(c.rejectReason)}</span><button class="d sm" onclick="delCust('${c.id}')">Del</button>`}</td></tr>`};
 return`<h2>Pending Approvals (${pl.length})</h2><div class="tw"><table><tr><th>Customer</th><th>Phone</th><th>Added by</th><th>Total</th><th>Plan</th><th></th></tr>${pl.map(c=>row(c,1)).join('')||'<tr><td colspan=6>No pending customers 🎉</td></tr>'}</table></div>${rj.length?`<h3>Rejected</h3><div class="tw"><table>${rj.map(c=>row(c,0)).join('')}</table></div>`:''}`}
@@ -230,5 +233,47 @@ if(has('product','pieces','pcs','items','saman')){iv.sort((a,b)=>b.q-a.q);return
 if(has('customer','grahak')&&has('kitne','total','count'))return`👥 Total customers: ${B(C().filter(ok).length)}<br>Active: ${act.length} · Completed: ${PL.length-act.length}<br>Pending approval: ${PEND()}`;
 if(has('summary','khulasa','dashboard','overview','report'))return`📊 Summary:<br>Customers: ${B(C().filter(ok).length)} (active ${act.length})<br>Pending: ${B(rs(act.reduce((s,x)=>s+pend(x.i),0)))}<br>Total collected: ${B(rs(allPay.reduce((s,p)=>s+p.amount,0)))}<br>Aaj collected: ${B(rs(allPay.filter(p=>p.date==t).reduce((s,p)=>s+p.amount,0)))}<br>Late: <span style="color:var(--r)">${rs(act.reduce((s,x)=>s+lateAmt(x.i),0))}</span><br>Approval pending: ${PEND()}`;
 return'Mujhe ye sawal samajh nahi aya 🙏<br>Customer / recovery man ka naam, CNIC ya phone likhein, ya "help" likhein.'}
-seed();addSales();render();
-</script></body></html>
+window.APP={DB,ui,render,toast,setSess:v=>{SESS=v}};$('#app').innerHTML='<p style="padding:30px">Loading…</p>';
+</script>
+<script type="module">
+/* ===================== FIREBASE SETTINGS — paste your own firebaseConfig here ===================== */
+const firebaseConfig={
+  apiKey:"AIzaSyCRJW8oUddZC3HVgXacEOYI3DO-jm-dggs",
+  authDomain:"classpro-9d2c3.firebaseapp.com",
+  projectId:"classpro-9d2c3",
+  storageBucket:"classpro-9d2c3.firebasestorage.app",
+  messagingSenderId:"250861334850",
+  appId:"1:250861334850:web:e523eb47fc7d18f48298db"
+};
+const DOMAIN='installments.app'; // usernames become username@installments.app in Firebase Authentication
+/* =================================================================================================== */
+if(firebaseConfig.apiKey.startsWith('PASTE')){document.getElementById('app').innerHTML='<div class="login"><h3>Firebase not configured</h3><p>Open index.html in a text editor and paste your firebaseConfig near the end of the file.</p></div>';throw new Error('firebaseConfig missing')}
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,signOut,createUserWithEmailAndPassword,updatePassword,reauthenticateWithCredential,EmailAuthProvider} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,collection,query,where,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
+const clean=o=>JSON.parse(JSON.stringify(o)),sj=o=>JSON.stringify(o,(k,v)=>v&&typeof v=='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(x=>[x,v[x]])):v);
+const last={users:{},customers:{},installments:{},pay:{}};let Q=Promise.resolve(),unsubs=[],tk,ROLE='';
+const kick=()=>{clearTimeout(tk);tk=setTimeout(()=>APP.render(),60)};
+/* Each plan carries copies of its customer's recoveryId / addedBy / approval so Security Rules can check them */
+function docFor(k,o){o=clean(o);if(k=='users')delete o.password;if(k=='installments'){const c=APP.DB.customers.find(x=>x.id==o.customerId)||{};Object.assign(o,clean({recoveryId:c.recoveryId||'',addedBy:c.addedBy||'',approval:c.approval||'approved'}))}return o}
+async function run(k,list){const seen=new Set();for(const o of list){const d=docFor(k,o),j=sj(d);seen.add(o.id);if(last[k][o.id]!==j){if(ROLE=='recovery'&&k=='installments'){const pj=sj(d.payments||[]);if(pj!==last.pay[o.id]){await updateDoc(doc(db,k,o.id),{payments:d.payments});last.pay[o.id]=pj}}else await setDoc(doc(db,k,o.id),d);last[k][o.id]=j}}
+for(const id of Object.keys(last[k]))if(!seen.has(id)){await deleteDoc(doc(db,k,id));delete last[k][id]}}
+window.FBsync=(k,old,nv)=>{Q=Q.then(async()=>{await run(k,nv);if(k=='customers')await run('installments',APP.DB.installments)}).catch(e=>{console.error(e);APP.toast('Save failed: '+(e.code||e.message))})};
+function listen(u,role){unsubs.forEach(x=>x());unsubs=[];const col=n=>collection(db,n),q=n=>role=='admin'?col(n):role=='recovery'?query(col(n),where('recoveryId','==',u.uid),where('approval','==','approved')):query(col(n),where('addedBy','==',u.uid));
+const take=(n,s)=>{APP.DB[n]=s.docs.map(d=>({...d.data(),id:d.id}));last[n]=Object.fromEntries(s.docs.map(d=>[d.id,sj(clean(d.data()))]));if(n=='installments')last.pay=Object.fromEntries(s.docs.map(d=>[d.id,sj(d.data().payments||[])]));kick()};
+for(const n of['customers','installments'])unsubs.push(onSnapshot(q(n),s=>take(n,s),e=>APP.toast('Load error: '+e.code)));
+if(role=='admin')unsubs.push(onSnapshot(col('users'),s=>take('users',s),e=>APP.toast('Load error: '+e.code)))}
+onAuthStateChanged(auth,async u=>{unsubs.forEach(x=>x());unsubs=[];
+if(!u){APP.setSess(null);Object.assign(APP.DB,{users:[],customers:[],installments:[]});APP.render();return}
+try{const s=await getDoc(doc(db,'users',u.uid));if(!s.exists()){APP.toast('Account has no profile. Ask the admin.');await signOut(auth);return}
+const me={...s.data(),id:u.uid};ROLE=me.role;APP.DB.users=[me];APP.setSess({userId:u.uid,role:me.role});APP.ui.view={admin:'dash',sales:'mine'}[me.role]||'today';listen(u,me.role);APP.render()}
+catch(e){APP.toast('Login error: '+(e.code||e.message));await signOut(auth)}});
+window.FB={
+ async login(id,pw){if(!id||!pw)return APP.toast('Enter username and password');try{await signInWithEmailAndPassword(auth,id.includes('@')?id:id.toLowerCase()+'@'+DOMAIN,pw)}catch(e){console.error(e);APP.toast('Login failed: '+(e.code||e.message))}},
+ logout(){signOut(auth)},
+ async changePass(o,n){if(n.length<6)return APP.toast('New password: min 6 characters');try{const u=auth.currentUser;await reauthenticateWithCredential(u,EmailAuthProvider.credential(u.email,o));await updatePassword(u,n);closeM();APP.toast('Password changed')}catch(e){APP.toast('Current password is wrong')}},
+ async createUser(p,pw){try{const a2=getAuth(initializeApp(firebaseConfig,'sec'+Date.now())),un=p.username.toLowerCase(),c=await createUserWithEmailAndPassword(a2,un+'@'+DOMAIN,pw);await signOut(a2);await setDoc(doc(db,'users',c.user.uid),{...p,username:un});closeM();APP.toast('User created')}catch(e){APP.toast(e.code=='auth/email-already-in-use'?'This username already exists in Firebase':'Error: '+(e.code||e.message))}}
+};
+</script>
+</body></html>
